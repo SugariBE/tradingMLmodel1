@@ -1,0 +1,215 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By 
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from DEF import process_and_log_market_data
+import tkinter as tk
+import threading
+import datetime
+import pyautogui
+import time
+# Selenium setup for Brave browser
+chromedriver_path = "D:\\Chrome\\chromedriver.exe" # Ensure this is the correct path to chromedriver
+options = Options()
+options.add_experimental_option("detach", True)  # Keep the browser window open after script execution
+service = Service(executable_path=chromedriver_path)
+driver = webdriver.Chrome(options=options, service=service)
+
+# Open the webpage
+try:
+    # Open the webpage
+    driver.get("https://www.tradingview.com/")
+    driver.maximize_window()
+    
+    # Use WebDriverWait to wait for the button to become clickable
+    wait = WebDriverWait(driver, 10)  # Waits up to 10 seconds
+    button_xpath = "/html/body/div[3]/div[3]/div[2]/div[3]/button[2]"  # The full XPath you provided
+    button = wait.until(EC.element_to_be_clickable((By.XPATH, button_xpath)))
+    button.click()
+    time.sleep(2)
+
+    # click Sign up button
+    screen_width,screen_height= pyautogui.size()
+    center_x = 1700
+    click_y = 230 
+    time.sleep(1)
+    pyautogui.click(center_x, click_y)
+
+    # Email button
+    wait = WebDriverWait(driver, 5)  # Waits up to 10 seconds
+    Email_xpath = "/html/body/div[9]/div/div/div[1]/div/div[2]/div[2]/div/div/button"  # The full XPath you provided
+    button = wait.until(EC.element_to_be_clickable((By.XPATH, Email_xpath)))
+    button.click()
+    time.sleep(2)
+    
+    #Placing my username and password
+    email_xpath = '/html/body/div[9]/div/div/div[1]/div/div[2]/div[2]/div/div/div/form/div[1]/span[2]/span[1]/input'  # Update this with the actual XPath
+    password_xpath = '/html/body/div[9]/div/div/div[1]/div/div[2]/div[2]/div/div/div/form/div[2]/span[2]/span[1]/input'  # Update this with the actual XPath
+    login_button_xpath = '/html/body/div[9]/div/div/div[1]/div/div[2]/div[2]/div/div/div/form/button'  # Update this with the actual XPath
+    # Find the email and password fields and type the login credentials
+    
+    driver.find_element(By.XPATH, email_xpath).send_keys("!!gmail!!")
+    time.sleep(2)
+    driver.find_element(By.XPATH, password_xpath).send_keys("!!pass!!")
+    time.sleep(2)
+     # Find the login button and click it
+    driver.find_element(By.XPATH, login_button_xpath).click()
+    time.sleep(2)
+       
+    #wait to solve the CAPTCHA
+    time.sleep(60)
+            
+    # Clicking Product button
+    wait = WebDriverWait(driver, 5)  # Waits up to 10 seconds
+    Prod_xpath = "/html/body/div[4]/div[3]/div[2]/div[2]/div/nav/ul/li[1]/a"  # The full XPath you provided
+    button = wait.until(EC.element_to_be_clickable((By.XPATH, Prod_xpath)))
+    button.click()
+    time.sleep(5)
+    
+    #Click data window
+    wait = WebDriverWait(driver, 5)  # Waits up to 10 seconds
+    Data_xpath = "/html/body/div[2]/div[6]/div/div[1]/div/div/div/div/button[3]"  # The full XPath you provided
+    button = wait.until(EC.element_to_be_clickable((By.XPATH, Data_xpath)))
+    button.click()
+    time.sleep(5)
+    
+    # DATA Window itself
+    wait = WebDriverWait(driver, 5)  # Waits up to 10 seconds
+    Data_xpath = "/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[1]/div/div/div/button[2]"  # The full XPath you provided
+    button = wait.until(EC.element_to_be_clickable((By.XPATH, Data_xpath)))
+    button.click()
+    time.sleep(5)
+     
+      
+    def collect_data():
+   
+        # Define the XPaths for the data you want to collect
+        xpaths = {
+        'Open': '/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[2]/div/div[2]/div/div[3]/div[2]/div[1]/div[2]/span',  
+            'High': '/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[2]/div/div[2]/div/div[3]/div[2]/div[2]/div[2]/span',  
+            'Low': '/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[2]/div/div[2]/div/div[3]/div[2]/div[3]/div[2]/span',
+            'Close': '/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[2]/div/div[2]/div/div[3]/div[2]/div[4]/div[2]/span',
+            'Volume': '/html/body/div[2]/div[6]/div/div[2]/div[1]/div[3]/div/div[2]/div/div[2]/div/div[3]/div[2]/div[6]/div[2]/span',
+        }
+
+        # Dictionary to hold the collected data
+        collected_data = {}
+
+        # Loop through the xpaths dictionary and collect data from each element
+        for key, xpath in xpaths.items():
+            # Find the element and get its text value
+            element = driver.find_element(By.XPATH, xpath)
+            collected_data[key] = element.text
+
+        # Format the collected data into a string
+        data_string = ', '.join([f"{key}: {value}" for key, value in collected_data.items()])
+        
+        return data_string
+
+    def save_data_to_text_file_1(data, filename="D:\project\MODEL_1\FUll_data.txt"):
+        """Append the collected data to Text File 1."""
+        with open(filename, "a", encoding='utf-8') as file:
+            file.write(data + "\n")
+
+    def run_inner_loop_for_one_hour():
+        start_time = datetime.datetime.now()
+        end_time = start_time + datetime.timedelta(hours=1)
+
+        while datetime.datetime.now() < end_time:
+            # Collect data from the webpage
+            data = collect_data()
+
+            # Save the collected data to Text File 1
+            save_data_to_text_file_1(data)
+
+            # Sleep for a short interval before collecting the next data point
+            time.sleep(5)  # Sleep time in seconds, adjust as necessary
+
+    def save_last_data_point_from_file(input_file, output_file):
+        with open(input_file, "r", encoding='utf-8') as file:
+            lines = file.readlines()
+            last_line = lines[-1] if lines else ""
+        
+        with open(output_file, "a", encoding='utf-8') as file:
+            file.write(last_line)
+
+    def data_processing_loop(update_ui_callback):
+                # Outer loop runs until Friday night
+                while True:
+                    current_day = datetime.datetime.now().weekday()
+                    current_hour = datetime.datetime.now().hour
+                    
+                    if current_day == 4 and current_hour >= 23:  # Check if it's Friday night
+                        break
+                    
+                    # Run the inner loop for one hour
+                    run_inner_loop_for_one_hour()
+                    
+                    # Process the last data point after each hour
+                    save_last_data_point_from_file("D:\project\MODEL_1\FUll_data.txt", "D:\project\MODEL_1\1h_data.txt")
+                    
+                    results = process_and_log_market_data()
+                    # Dynamically create and place a label for each result
+                    update_ui_callback(results)
+                    time.sleep(5)
+
+    def update_ui():
+        global root, labels_frame
+        
+        # Clear existing data
+        for widget in labels_frame.winfo_children():
+            widget.destroy()
+
+        # Fetch new data and update UI
+        results = process_and_log_market_data()
+        for result in results:
+            label = tk.Label(labels_frame, text=result)
+            label.pack(anchor='w', padx=10, pady=2)
+        
+        # Schedule the next update
+        root.after(5000, check_for_updates)
+
+    def check_for_updates():
+        # Example check - update according to your logic
+        current_day = datetime.datetime.now().weekday()
+        current_hour = datetime.datetime.now().hour
+        
+        # Continue running until Friday night
+        if not (current_day == 4 and current_hour >= 23):
+            update_ui()
+        else:
+            print("It's Friday night, stopping updates.")
+            # Here you can decide to close the app or do something else
+
+
+    try:
+        # Create the main application window
+        root = tk.Tk()
+        root.title("DATA")  # Set the window title
+        root.geometry("400x300")  # Set the initial size of the window (width x height)
+        root.resizable(1, 1)
+        
+        # Create a frame to hold the labels
+        labels_frame = tk.Frame(root)
+        labels_frame.pack()
+
+        # Start the periodic check
+        check_for_updates()
+
+        # Start the Tkinter event loop
+        root.mainloop()
+            
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        driver.quit()
+    
+    
+       
+except Exception as e:
+    print(f"An error occurred: {e}")
+finally:
+    input("Press any key to exit...")
