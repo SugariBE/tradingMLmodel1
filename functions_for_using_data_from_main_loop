@@ -1,0 +1,769 @@
+from collections import deque
+import re
+import time
+
+def read_market_data_from_file(file_path="D:\project\MODEL_1\1h_data.txt", period=100):
+    """
+    Reads market data from a file and keeps a rolling list of the last 'period' market data entries.
+    
+    :param file_path: Path to the data file.
+    :param period: Number of elements to keep in the rolling list.
+    :return: A deque containing dictionaries of the last 'period' market data entries.
+    """
+    data = deque(maxlen=period)
+    with open(file_path, 'r', encoding='utf-8') as file:
+        next(file)  # Skip header line
+        for line in file:
+            parts = line.strip().split(',')
+            try:
+                # Assuming the file structure is: Date,Open,High,Low,Close,Volume
+                market_data = {
+                    'Open': float(parts[1]),
+                    'High': float(parts[2]),
+                    'Low': float(parts[3]),
+                    'Close': float(parts[4]),
+                    'Volume': int(parts[5])
+                }
+                data.append(market_data)
+            except ValueError:
+                print(f"Skipping invalid line: {line.strip()}")
+                
+    return data
+
+def moving_average_of_close_with_signals(data, period=25):
+    """
+    Calculates the moving average of the Close values over a specified period and provides Buy/Sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: Period over which to calculate the moving average.
+    :return: A tuple containing a list of moving average values and a list of signals ('Buy', 'Sell', or 'Hold').
+    """
+    if len(data) < period:
+        return [], []  # Not enough data for moving average or signals
+
+    averages = []
+    signals = []
+
+    # Calculate moving averages
+    for i in range(len(data) - period + 1):
+        period_data = list(data)[i:i+period]
+        period_sum = sum(item['Close'] for item in period_data)
+        ma_value = period_sum / period
+        averages.append(ma_value)
+
+        # Determine signals based on the position of the Close price relative to the MA
+        if i != 0:  # Skip the first average since there's no previous MA to compare
+            current_close = period_data[-1]['Close']
+            previous_close = list(data)[i-1]['Close']
+            previous_ma = averages[-2] if len(averages) > 1 else ma_value
+
+            if previous_close <= previous_ma and current_close > ma_value:
+                signals.append('Buy')
+            elif previous_close >= previous_ma and current_close < ma_value:
+                signals.append('Sell')
+            else:
+                signals.append('Hold')
+        else:
+            signals.append('Hold')  # Default signal for the first calculation
+
+    # Extend signals list to match the length of data for consistency
+    signals = ['Hold'] * (period - 1) + signals
+
+    return averages, signals
+
+def exponential_moving_average_with_signals(data, period=26):
+    """
+    Calculates the Exponential Moving Average (EMA) for the Close values over a specified period and generates buy/sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: Period over which to calculate the EMA. Default is 26.
+    :return: A tuple containing a list of EMA values and a list of signals ('Buy', 'Sell', 'Hold').
+    """
+    ema_values = []
+    signals = []
+
+    if len(data) < period:
+        return ema_values, signals  # Not enough data
+
+    # Calculate the SMA for the first 'period' to initialize the EMA calculation
+    initial_period_data = list(data)[:period]
+    initial_sma = sum(item['Close'] for item in initial_period_data) / period
+    ema_values.append(initial_sma)
+
+    # Calculate the multiplier for weighting the EMA
+    multiplier = 2 / (period + 1)
+
+    # Initialize previous EMA with initial SMA
+    previous_ema = initial_sma
+
+    # Loop through the data, starting from the period's end to calculate EMA and generate signals
+    for i, item in enumerate(list(data)[period:], start=period):
+        ema_today = (item['Close'] * multiplier) + (previous_ema * (1 - multiplier))
+        ema_values.append(ema_today)
+
+        # Generate signals
+        if i == period or not signals:  # No signal for the first calculation
+            signals.append("Hold")
+        else:
+            current_close = item['Close']
+            previous_close = data[i-1]['Close']
+
+            if previous_close < ema_values[-2] and current_close > ema_today:
+                signals.append("Buy")
+            elif previous_close > ema_values[-2] and current_close < ema_today:
+                signals.append("Sell")
+            else:
+                signals.append("Hold")
+
+        previous_ema = ema_today
+
+    return ema_values, signals
+
+def calculate_rsi_from_market_data_with_signals(data, period=14):
+    """
+    Calculates the Relative Strength Index (RSI) using the Close values from the market data entries
+    and generates buy/sell signals based on RSI thresholds.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: The period over which to calculate the RSI. Default is 14.
+    :return: A tuple of two lists: RSI values and corresponding signals ('Buy', 'Sell', or 'Hold').
+    """
+    if len(data) < period:
+        return [None] * len(data), []  # Not enough data for RSI calculation
+    
+    close_values = [entry['Close'] for entry in data]
+    deltas = [close_values[i] - close_values[i-1] for i in range(1, len(close_values))]
+    gains = [delta if delta > 0 else 0 for delta in deltas]
+    losses = [-delta if delta < 0 else 0 for delta in deltas]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    rs_values = [avg_gain / avg_loss if avg_loss != 0 else 0]
+    rsi_values = [100 - (100 / (1 + rs_values[0]))]
+    signals = ['Hold' for _ in range(period)]  # Initial signals as 'Hold'
+
+    for i in range(period, len(deltas)):
+        new_gain = gains[i]
+        new_loss = losses[i]
+
+        avg_gain = ((avg_gain * (period - 1)) + new_gain) / period
+        avg_loss = ((avg_loss * (period - 1)) + new_loss) / period
+
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0
+        rsi = 100 - (100 / (1 + rs))
+
+        rsi_values.append(rsi)
+        
+        # Generate signals based on RSI values
+        if rsi_values[-2] < 30 and rsi_values[-1] >= 30:
+            signals.append('Buy')
+        elif rsi_values[-2] > 70 and rsi_values[-1] <= 70:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    return rsi_values, signals
+
+def fibonacci_retracements_from_hourly_data(data):
+    """
+    Calculates Fibonacci Retracement Levels from the highest high and lowest low of the previous day's hourly candle data.
+    Generates buy or sell signals based on the current day's price action in relation to these levels.
+    
+    :param data: Deque of market data entries, each an instance of dict with hourly data including Open, High, Low, Close, Volume.
+    :return: A dictionary containing the Fibonacci retracement levels of the previous day and the buy/sell signal for the current day.
+    """
+    # Extract the previous day's data
+    previous_day_data = data[-24:-1]
+
+    # Determine the highest high and lowest low from the previous day
+    high = max(entry['High'] for entry in previous_day_data)
+    low = min(entry['Low'] for entry in previous_day_data)
+    
+    # Calculate Fibonacci retracement levels
+    diff = high - low
+    levels = {
+        '23.6%': high - diff * 0.236,
+        '38.2%': high - diff * 0.382,
+        '50.0%': high - diff * 0.5,
+        '61.8%': high - diff * 0.618,
+        '78.6%': high - diff * 0.786,
+    }
+
+    # Get the last close price as the current price to check against levels
+    current_price = data[-1]['Close']
+    signal = "Hold"
+
+    # Check if the current price is near any Fibonacci level for a potential signal
+    for name, level in levels.items():
+        if abs(current_price - level) / (high - low) <= 0.01:  # within 1% of the high-low range
+            if current_price > level:
+                signal = "Buy - Price near " + name
+                break
+            elif current_price < level:
+                signal = "Sell - Price near " + name
+                break
+
+    return {
+        'Levels': levels,
+        'Signal': signal
+    }
+
+def macd_with_signals(data, short_period=12, long_period=26, signal_period=9):
+    """
+    Extend the MACD calculation to include buy and sell signals based on the MACD line and Signal line crossover.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param short_period: Period for the short EMA, default is 12.
+    :param long_period: Period for the long EMA, default is 26.
+    :param signal_period: Period for the signal line, typically 9.
+    :return: A tuple: (MACD line, Signal line, MACD histogram, Signals).
+    """
+    # Existing MACD calculation logic
+    close_prices = [entry['Close'] for entry in data]
+
+    def exponential_moving_average(prices, period):
+        ema = [sum(prices[:period]) / period]
+        multiplier = 2 / (period + 1)
+        for price in prices[period:]:
+            ema.append((price - ema[-1]) * multiplier + ema[-1])
+        return ema
+    
+    short_ema = exponential_moving_average(close_prices, short_period)
+    long_ema = exponential_moving_average(close_prices, long_period)
+    macd_line = [s - l for s, l in zip(short_ema[-len(long_ema):], long_ema)]
+    signal_line = exponential_moving_average(macd_line, signal_period)
+    macd_histogram = [m - s for m, s in zip(macd_line[-len(signal_line):], signal_line)]
+    
+    # Generate signals
+    signals = ['Hold'] * (len(macd_line) - 1)  # Initialize signals with 'Hold'
+    for i in range(1, len(macd_line)):
+        if macd_line[i] > signal_line[i] and macd_line[i-1] <= signal_line[i-1]:
+            signals.append('Buy')
+        elif macd_line[i] < signal_line[i] and macd_line[i-1] >= signal_line[i-1]:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    return macd_line, signal_line, macd_histogram, signals
+
+def bollinger_bands_with_signals(data, period=20, num_std_dev=2):
+    """
+    Calculate Bollinger Bands for the given market data and generate buy/sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: The period over which to calculate the SMA and standard deviation. Default is 20.
+    :param num_std_dev: The number of standard deviations to use for the upper and lower bands. Default is 2.
+    :return: A tuple of four items: (upper band, middle band, lower band, signals).
+    """
+    # Extract Close prices from the market data
+    close_prices = [entry['Close'] for entry in data]
+
+    # Calculate the SMA for the Close prices
+    sma = [sum(close_prices[i-period:i]) / period for i in range(period, len(close_prices) + 1)]
+
+    # Calculate the standard deviation for the same periods
+    std_dev = [sum([(p - sma[i-period])**2 for p in close_prices[i-period:i]]) / period for i in range(period, len(close_prices) + 1)]
+    std_dev = [sd**0.5 for sd in std_dev]  # Square root to get standard deviation
+
+    # Calculate the upper and lower bands
+    upper_band = [sma[i] + num_std_dev * std_dev[i] for i in range(len(sma))]
+    lower_band = [sma[i] - num_std_dev * std_dev[i] for i in range(len(sma))]
+
+    # Generate signals based on the closing price's interaction with the bands
+    signals = ['Hold'] * (period - 1)  # Default signals for the initial period where bands are not available
+    for i in range(len(sma)):
+        if i == 0:
+            continue  # Skip the first calculation as there's no prior close price for comparison
+        # Buy signal: closing price moving back above the lower band
+        if close_prices[i+period-1] > lower_band[i] and close_prices[i+period-2] <= lower_band[i]:
+            signals.append('Buy')
+        # Sell signal: closing price moving back below the upper band
+        elif close_prices[i+period-1] < upper_band[i] and close_prices[i+period-2] >= upper_band[i]:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    return upper_band, sma, lower_band, signals
+
+def stochastic_oscillator_with_signals(data, period=14, smooth_k=3, smooth_d=3):
+    """
+    Calculate the Stochastic Oscillator using market data and generate buy/sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: The lookback period for calculating the high and low. Default is 14.
+    :param smooth_k: The smoothing period for %K. Default is 3.
+    :param smooth_d: The smoothing period for %D, which is a moving average of %K. Default is 3.
+    :return: A tuple of three lists: (%K line, %D line, Signals).
+    """
+    percent_k_values, percent_d_values, signals = [], [], []
+
+    for i in range(period - 1, len(data)):
+        high_period = max(entry['High'] for entry in list(data)[i-period+1:i+1])
+        low_period = min(entry['Low'] for entry in list(data)[i-period+1:i+1])
+        close = data[i]['Close']
+
+        # Calculate %K
+        percent_k = ((close - low_period) / (high_period - low_period)) * 100 if (high_period - low_period) != 0 else 0
+        percent_k_values.append(percent_k)
+
+    # Apply smoothing to %K to calculate smoothed %K
+    smoothed_k_values = [sum(percent_k_values[i-smooth_k+1:i+1]) / smooth_k for i in range(smooth_k - 1, len(percent_k_values))]
+    
+    # Calculate %D as the moving average of smoothed %K
+    percent_d_values = [sum(smoothed_k_values[i-smooth_d+1:i+1]) / smooth_d for i in range(smooth_d - 1, len(smoothed_k_values))]
+
+    # Generate signals
+    for i in range(1, len(smoothed_k_values)):
+        if smoothed_k_values[i] > percent_d_values[i] and smoothed_k_values[i-1] <= percent_d_values[i-1] and smoothed_k_values[i] < 20:
+            signals.append('Buy')
+        elif smoothed_k_values[i] < percent_d_values[i] and smoothed_k_values[i-1] >= percent_d_values[i-1] and smoothed_k_values[i] > 80:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    # Prepend 'Hold' signals for the periods not covered
+    signals = ['Hold'] * (smooth_k - 1) + signals
+
+    return smoothed_k_values, percent_d_values, signals
+
+def average_directional_index_with_signals(data, period=14):
+    """
+    Calculate the Average Directional Index (ADX) using market data and generate buy/sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: The period over which to calculate the ADX. Default is 14.
+    :return: A tuple containing the ADX values and signals.
+    """
+    true_ranges, plus_dm, minus_dm = [], [], []
+
+    # Calculate True Range, +DM, and -DM
+    for i in range(1, len(data)):
+        high = data[i]['High']
+        low = data[i]['Low']
+        prev_close = data[i-1]['Close']
+        
+        true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(true_range)
+
+        plus_dm.append(max(0, high - data[i-1]['High']))
+        minus_dm.append(max(0, data[i-1]['Low'] - low))
+
+    # Smoothing
+    smoothed_tr = [sum(true_ranges[:period])]
+    smoothed_plus_dm = [sum(plus_dm[:period])]
+    smoothed_minus_dm = [sum(minus_dm[:period])]
+    for i in range(period, len(data)):
+        smoothed_tr.append(smoothed_tr[-1] - (smoothed_tr[-1] / period) + true_ranges[i])
+        smoothed_plus_dm.append(smoothed_plus_dm[-1] - (smoothed_plus_dm[-1] / period) + plus_dm[i])
+        smoothed_minus_dm.append(smoothed_minus_dm[-1] - (smoothed_minus_dm[-1] / period) + minus_dm[i])
+
+    # Calculate +DI and -DI
+    plus_di = [100 * dm / tr for dm, tr in zip(smoothed_plus_dm, smoothed_tr)]
+    minus_di = [100 * dm / tr for dm, tr in zip(smoothed_minus_dm, smoothed_tr)]
+
+    # Calculate the DX and ADX
+    dx = [100 * abs(pdi - mdi) / (pdi + mdi) if pdi + mdi != 0 else 0 for pdi, mdi in zip(plus_di, minus_di)]
+    adx = [sum(dx[:period]) / period]
+    for i in range(period, len(dx)):
+        adx.append(((adx[-1] * (period - 1)) + dx[i]) / period)
+
+    signals = []
+    for i in range(1, len(adx)):
+        if plus_di[i] > minus_di[i] and plus_di[i-1] <= minus_di[i-1] and adx[i] > 25:
+            signals.append('Buy')
+        elif minus_di[i] > plus_di[i] and minus_di[i-1] <= plus_di[i-1] and adx[i] > 25:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    # Prepend 'Hold' signals for the initial period
+    signals = ['Hold'] * (period - 1) + signals
+
+    return adx, signals
+
+def ichimoku_cloud_with_signals(data, period1=9, period2=26, period3=52):
+    """
+    Calculate Ichimoku Cloud components using market data and generate buy/sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period1: The period for Tenkan-sen (Conversion Line). Default is 9.
+    :param period2: The period for Kijun-sen (Base Line) and Chikou Span (Lagging Span). Default is 26.
+    :param period3: The period for Senkou Span B (Leading Span B). Default is 52.
+    :return: A dictionary containing the Ichimoku Cloud components and signals.
+    """
+    tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span, signals = ([] for _ in range(6))
+
+    # Calculate components
+    for i in range(len(data)):
+        if i >= period1 - 1:
+            period1_high = max(entry['High'] for entry in list(data)[i-period1+1:i+1])
+            period1_low = min(entry['Low'] for entry in list(data)[i-period1+1:i+1])
+            tenkan_sen.append((period1_high + period1_low) / 2)
+        
+        if i >= period2 - 1:
+            period2_high = max(entry['High'] for entry in list(data)[i-period2+1:i+1])
+            period2_low = min(entry['Low'] for entry in list(data)[i-period2+1:i+1])
+            kijun_sen.append((period2_high + period2_low) / 2)
+            chikou_span.insert(0, data[i]['Close'])
+        
+        if i >= period3 - 1:
+            period3_high = max(entry['High'] for entry in list(data)[i-period3+1:i+1])
+            period3_low = min(entry['Low'] for entry in list(data)[i-period3+1:i+1])
+            senkou_span_b.append((period3_high + period3_low) / 2)
+    
+    for i in range(min(len(tenkan_sen), len(kijun_sen))):
+        senkou_span_a.append((tenkan_sen[i] + kijun_sen[i]) / 2)
+
+    chikou_span = chikou_span[:-(period2) or None]
+    senkou_span_a = [None] * period2 + senkou_span_a
+    senkou_span_b = [None] * period2 + senkou_span_b
+
+    # Generate signals based on the crossing of Tenkan-sen and Kijun-sen
+    for i in range(1, min(len(tenkan_sen), len(kijun_sen))):
+        if tenkan_sen[i] > kijun_sen[i] and tenkan_sen[i-1] <= kijun_sen[i-1]:
+            signals.append('Buy')
+        elif tenkan_sen[i] < kijun_sen[i] and tenkan_sen[i-1] >= kijun_sen[i-1]:
+            signals.append('Sell')
+        else:
+            signals.append('Hold')
+
+    # Adjust the length of the signals list to match the data
+    signals = ['Hold'] * (max(period1, period2, period3) - 1) + signals + ['Hold'] * (len(data) - len(signals))
+
+    return {
+        'Tenkan-sen': tenkan_sen,
+        'Kijun-sen': kijun_sen,
+        'Senkou Span A': senkou_span_a,
+        'Senkou Span B': senkou_span_b,
+        'Chikou Span': chikou_span,
+        'Signals': signals
+    }
+
+def volume_oscillator(data, short_period=5, long_period=20):
+    """
+    Calculate Volume Oscillator and return "high volume" or "low volume" based on the comparison
+    with the average volume.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param short_period: The short period moving average of volume. Default is 5.
+    :param long_period: The long period moving average of volume. Default is 20.
+    :return: A string indicating "high volume" or "low volume".
+    """
+    # Extract volume data from the market data
+    volume_data = [entry['Volume'] for entry in data]
+    
+    # Calculate moving averages for the specified periods
+    def moving_average(values, period):
+        return [sum(values[i-period:i]) / period for i in range(period, len(values) + 1)]
+
+    short_ma = moving_average(volume_data, short_period)
+    long_ma = moving_average(volume_data, long_period)
+
+    # Compare the most recent volume to the average of the short and long period MAs
+    recent_volume = volume_data[-1]
+    average_volume = (short_ma[-1] + long_ma[-1]) / 2
+
+    return "high volume" if recent_volume > average_volume else "low volume"
+
+def parabolic_sar(data, initial_af=0.02, increment=0.02, max_af=0.20):
+    """
+    Calculate the Parabolic SAR and indicate buy or sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param initial_af: Initial acceleration factor.
+    :param increment: Increment value for the acceleration factor.
+    :param max_af: Maximum acceleration factor.
+    :return: "proper time to sell" or "proper time to buy" based on the Parabolic SAR calculation.
+    """
+    sar = data[0]['Close']  # Initialize SAR with the first close price
+    ep = data[0]['High'] if data[1]['Close'] > data[0]['Close'] else data[0]['Low']  # Initial extreme point
+    af = initial_af  # Initial acceleration factor
+    uptrend = data[1]['Close'] > data[0]['Close']  # Initial trend direction
+    
+    # For storing SAR values, not necessary for signal but useful for analysis
+    sar_values = [sar]
+    
+    for i in range(1, len(data)):
+        previous_sar = sar
+        high, low, close = data[i]['High'], data[i]['Low'], data[i]['Close']
+        
+        # Calculate today's SAR
+        sar = previous_sar + af * (ep - previous_sar)
+        
+        # Adjust SAR if it's within or beyond today's or yesterday's range
+        if uptrend:
+            sar = min(sar, low, data[i-1]['Low'])
+        else:
+            sar = max(sar, high, data[i-1]['High'])
+        
+        # Check for trend switch
+        if (uptrend and close < sar) or (not uptrend and close > sar):
+            # Switch trend direction
+            uptrend = not uptrend
+            af = initial_af  # Reset acceleration factor
+            sar = ep  # Reset SAR to last extreme point
+            ep = high if uptrend else low  # Set new extreme point
+            
+        else:
+            # Update extreme point and acceleration factor
+            if (uptrend and high > ep) or (not uptrend and low < ep):
+                ep = high if uptrend else low
+                af = min(af + increment, max_af)
+            
+        sar_values.append(sar)
+    
+    # Interpretation for trading signal
+    signal = "proper time to buy" if uptrend else "proper time to sell"
+
+    return signal
+
+def williams_percent_r(data, period=14):
+    """
+    Calculate Williams %R and suggest trading signals with the current percent.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :param period: The period over which to calculate Williams %R. Default is 14.
+    :return: A string indicating "proper time to sell", "proper time to buy", or "No clear signal" with the current percent.
+    """
+    if len(data) < period:
+        return "Data insufficient for analysis"
+
+    # Extract high, low, and close prices
+    high_prices = [entry['High'] for entry in data]
+    low_prices = [entry['Low'] for entry in data]
+    close_prices = [entry['Close'] for entry in data]
+
+    # Calculate Williams %R
+    williams_r_values = []
+    for i in range(period - 1, len(data)):
+        highest_high = max(high_prices[i-period+1:i+1])
+        lowest_low = min(low_prices[i-period+1:i+1])
+        close = close_prices[i]
+        
+        if (highest_high - lowest_low) == 0:
+            williams_r = 0  # Prevent division by zero
+        else:
+            williams_r = ((highest_high - close) / (highest_high - lowest_low)) * -100
+        
+        williams_r_values.append(williams_r)
+
+    # Latest Williams %R value
+    latest_williams_r = williams_r_values[-1]
+
+    # Trading signals based on Williams %R
+    if latest_williams_r <= -80:
+        return "proper time to buy"
+    elif latest_williams_r >= -20:
+        return "proper time to sell"
+    else:
+        return f"No clear signal (Williams %R: {latest_williams_r:.2f}%)"
+
+def accumulation_distribution_line(data):
+    """
+    Calculate the Accumulation/Distribution Line and generate buy or sell signals.
+    
+    :param data: Deque of market data entries, each an instance of dict with Open, High, Low, Close, Volume.
+    :return: A signal indicating "buy", "sell", or "hold".
+    """
+    # Initialize A/D Line with zero
+    ad_line = [0]
+    
+    for i in range(1, len(data)):
+        close_curr = data[i]['Close']
+        close_prev = data[i-1]['Close']
+        high_curr = data[i]['High']
+        low_curr = data[i]['Low']
+        volume_curr = data[i]['Volume']
+        
+        if high_curr != low_curr:  # Avoid division by zero
+            # Calculate the Money Flow Multiplier
+            mfm = ((close_curr - low_curr) - (high_curr - close_curr)) / (high_curr - low_curr)
+            # Calculate the Money Flow Volume
+            mfv = mfm * volume_curr
+            # Accumulate/Distribute
+            ad_line.append(ad_line[-1] + mfv)
+        else:
+            ad_line.append(ad_line[-1])
+
+    # Generate signals based on the A/D Line trend compared to the price trend
+    if ad_line[-1] > ad_line[-2] and close_curr > close_prev:
+        signal = "buy"
+    elif ad_line[-1] < ad_line[-2] and close_curr < close_prev:
+        signal = "sell"
+    else:
+        signal = "hold"
+
+    return signal
+
+def calculate_pivot_points(data):
+    """
+    Adapted function to calculate pivot points using aggregated previous day's data.
+    Assumes 'data' contains hourly market data entries for the previous day.
+    
+    :param data: List (or deque) of dictionaries, each containing 'High', 'Low', 'Close', 'Volume' for hourly data points.
+    :return: Dictionary with pivot point, support/resistance levels, and a signal based on the current day's price action.
+    """
+    # Aggregate the previous day's high, low, and close values
+    yesterday_high = max(entry['High'] for entry in data)  # Maximum of high prices
+    yesterday_low = min(entry['Low'] for entry in data)    # Minimum of low prices
+    yesterday_close = data[-1]['Close']  # Closing price of the last hourly entry
+    
+    # Calculate pivot point based on aggregated data
+    pp = (yesterday_high + yesterday_low + yesterday_close) / 3
+    r1 = (2 * pp) - yesterday_low
+    s1 = (2 * pp) - yesterday_high
+    r2 = pp + (yesterday_high - yesterday_low)
+    s2 = pp - (yesterday_high - yesterday_low)
+
+    # Assume today's closing price is available (for signal determination)
+    # In a real scenario, this might be replaced with live or most recent data
+    today_close = data[-1]['Close']  # Placeholder for example
+
+    # Generate trading signals based on proximity to pivot point levels
+    signal = "No clear signal"
+    if today_close >= r2:
+        signal = "sell (breaking above second resistance level)"
+    elif today_close <= s2:
+        signal = "buy (breaking below second support level)"
+    elif today_close >= r1 and today_close < r2:
+        signal = "sell (approaching first resistance level)"
+    elif today_close <= s1 and today_close > s2:
+        signal = "buy (approaching first support level)"
+
+    return {
+        'Pivot Point': pp,
+        'First Resistance (R1)': r1,
+        'Second Resistance (R2)': r2,
+        'First Support (S1)': s1,
+        'Second Support (S2)': s2,
+        'Signal': signal
+    }
+
+def momentum_indicator(data, period=14):
+    """
+    Calculate the Momentum Indicator for a given list of closing prices and a period.
+    Generates "buy" or "sell" signals based on the momentum.
+    
+    :param close_data: List of closing prices.
+    :param period: The period over which to calculate the momentum. Default is 14.
+    :return: A tuple containing the list of momentum values and the trade signal.
+    """
+    close_data = [entry['Close'] for entry in data]
+    momentum_values = []
+    signals = []
+
+    for i in range(period, len(close_data)):
+        momentum = close_data[i] - close_data[i - period]
+        momentum_values.append(momentum)
+
+        # Generating signals
+        if i == period:
+            signals.append("hold")  # Initial value, no signal
+        else:
+            if momentum_values[-1] > 0 and momentum_values[-2] <= 0:
+                signals.append("buy")
+            elif momentum_values[-1] < 0 and momentum_values[-2] >= 0:
+                signals.append("sell")
+            else:
+                signals.append("hold")
+
+    return momentum_values, signals
+
+def calculate_vortex_indicator(data, period=14):
+    """
+    Calculate the Vortex Indicator (VI) using structured market data from a previous function.
+    Generates "buy" or "sell" signals based on VI+ crossing above VI- and vice versa.
+    
+    :param data: List (or deque) of dictionaries, each containing 'High', 'Low', 'Close', and 'Volume' from previous days.
+    :param period: The period over which to calculate the VI. Default is 14.
+    :return: A dictionary with the last VI+ and VI- values and the current trading signal.
+    """
+    # Initialize lists to hold True Range (TR) and Vortex Movements (VM)
+    tr = []
+    vm_plus = []
+    vm_minus = []
+    
+    for i in range(1, len(data)):
+        # Calculate components of True Range and Vortex Movements
+        high = data[i]['High']
+        low = data[i]['Low']
+        close_prev = data[i-1]['Close']
+        
+        tr.append(max(high - low, abs(high - close_prev), abs(low - close_prev)))
+        vm_plus.append(abs(high - data[i-1]['Low']))
+        vm_minus.append(abs(low - data[i-1]['High']))
+    
+    # Initialize sums for the initial period
+    tr_sum = sum(tr[:period])
+    vm_plus_sum = sum(vm_plus[:period])
+    vm_minus_sum = sum(vm_minus[:period])
+    
+    # Calculate initial VI+ and VI-
+    vi_plus = [vm_plus_sum / tr_sum]
+    vi_minus = [vm_minus_sum / tr_sum]
+    
+    # Calculate VI+ and VI- for each subsequent period
+    for i in range(period, len(data)):
+        tr_sum = tr_sum - tr[i-period] + tr[i]
+        vm_plus_sum = vm_plus_sum - vm_plus[i-period] + vm_plus[i]
+        vm_minus_sum = vm_minus_sum - vm_minus[i-period] + vm_minus[i]
+        
+        vi_plus.append(vm_plus_sum / tr_sum)
+        vi_minus.append(vm_minus_sum / tr_sum)
+    
+    # Determine the trading signal based on the latest VI+ and VI- values
+    signal = "hold"  # Default signal
+    if vi_plus[-1] > vi_minus[-1] and vi_plus[-2] <= vi_minus[-2]:
+        signal = "buy"
+    elif vi_plus[-1] < vi_minus[-1] and vi_plus[-2] >= vi_minus[-2]:
+        signal = "sell"
+
+    return {
+        'VI+': vi_plus[-1],
+        'VI-': vi_minus[-1],
+        'Signal': signal
+    }
+    
+    
+def process_and_log_market_data():
+    # Read market data
+    data = read_market_data_from_file()
+    
+    MA=moving_average_of_close_with_signals(data, period=25)
+    EMA=exponential_moving_average_with_signals(data, period=26)
+    RSI=calculate_rsi_from_market_data_with_signals(data, period=14)
+    FR=fibonacci_retracements_from_hourly_data(data)
+    MACD=macd_with_signals(data, short_period=12, long_period=26, signal_period=9)
+    BB=bollinger_bands_with_signals(data, period=20, num_std_dev=2)
+    SO=stochastic_oscillator_with_signals(data, period=14, smooth_k=3, smooth_d=3)
+    ADX=average_directional_index_with_signals(data, period=14)
+    IC=ichimoku_cloud_with_signals(data, period1=9, period2=26, period3=52)
+    V=volume_oscillator(data, short_period=5, long_period=20)
+    P=parabolic_sar(data, initial_af=0.02, increment=0.02, max_af=0.20)
+    W=williams_percent_r(data, period=14)
+    AD=accumulation_distribution_line(data)
+    PIVOT=calculate_pivot_points(data)
+    MOMENT=momentum_indicator(data, period=14)
+    VI=calculate_vortex_indicator(data, period=14)
+    result = [
+        f'Moving Average: {MA}',
+        f'Exponential Moving Average: {EMA}',
+        f'Relative Strength Index: {RSI}',
+        f'Fibonacci Retracements: {FR}',
+        f'MACD: {MACD}',
+        f'Bollinger Bands: {BB}',
+        f'Stochastic Oscillator: {SO}',
+        f'Average directional index: {ADX}',
+        f'Ichimoku Cloud: {IC}',
+        f'Volume Oscillator: {V}',
+        f'Parabolic Sar: {P}',
+        f'Williams Percent R: {W}',
+        f'Accumulate/Distribution Line: {AD}',
+        f'Pivot Points: {PIVOT}',
+        f'Momentum: {MOMENT}',
+        f'Vortex indicator: {VI}'
+    ]
+    
+    
+    return result
